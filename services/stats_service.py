@@ -9,7 +9,21 @@ from datetime import date, datetime, timezone
 from services import reading_service
 
 
-def calculate_streak(user_id: str) -> int:
+def _local_date(dt: datetime, tz: timezone) -> date:
+    """
+    Convert a stored timestamp to a calendar date in the given timezone.
+
+    finished_at values are written as UTC but come back from SQLite as naive
+    datetimes (the tzinfo is dropped on round-trip). We therefore treat a naive
+    value as UTC, then convert to ``tz`` before extracting the date — so the
+    calendar day matches what the user actually saw on their own clock.
+    """
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(tz).date()
+
+
+def calculate_streak(user_id: str, tz: timezone = None) -> int:
     """
     Calculate a user's current reading streak in consecutive days.
 
@@ -17,26 +31,34 @@ def calculate_streak(user_id: str) -> int:
     finished at least one book, counting back from today (or yesterday, if
     nothing has been finished today yet).
 
+    Dates are computed in ``tz`` (defaulting to the server's local timezone).
+    Because finished_at is stored in UTC, a book finished late at night is
+    counted on the correct local day rather than being pushed onto the UTC day.
+
     Returns 0 if the user has no reading history or if there is a gap of
     more than one day since their most recent finished book.
 
     Args:
         user_id: ID of the user.
+        tz:      Timezone to resolve calendar dates in. Defaults to the
+                 server's local timezone.
 
     Returns:
         The streak count as an integer.
     """
+    tz = tz or datetime.now().astimezone().tzinfo
+
     events = reading_service.get_reading_history(user_id)
     if not events:
         return 0
 
-    # Collect unique reading dates, most recent first.
+    # Collect unique finish dates (in the target timezone), most recent first.
     dates = sorted(
-        set(e.finished_at.date() for e in events),
+        {_local_date(e.finished_at, tz) for e in events},
         reverse=True,
     )
 
-    today = date.today()
+    today = datetime.now(tz).date()
 
     # Streak must start from today or yesterday — otherwise it has already broken.
     if (today - dates[0]).days > 1:
