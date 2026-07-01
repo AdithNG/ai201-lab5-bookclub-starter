@@ -23,6 +23,33 @@ def _local_date(dt: datetime, tz: timezone) -> date:
     return dt.astimezone(tz).date()
 
 
+def _streak_from_dates(finish_dates: set, today: date) -> int:
+    """
+    Given a set of calendar dates on which something was finished, return the
+    length of the consecutive-day streak ending at today or yesterday.
+
+    Returns 0 if the set is empty or the most recent date is more than one day
+    before today (the streak has already broken).
+    """
+    if not finish_dates:
+        return 0
+
+    dates = sorted(finish_dates, reverse=True)
+
+    # Streak must start from today or yesterday — otherwise it has already broken.
+    if (today - dates[0]).days > 1:
+        return 0
+
+    streak = 1
+    for i in range(len(dates) - 1):
+        if (dates[i] - dates[i + 1]).days == 1:
+            streak += 1
+        else:
+            break
+
+    return streak
+
+
 def calculate_streak(user_id: str, tz: timezone = None) -> int:
     """
     Calculate a user's current reading streak in consecutive days.
@@ -49,30 +76,34 @@ def calculate_streak(user_id: str, tz: timezone = None) -> int:
     tz = tz or datetime.now().astimezone().tzinfo
 
     events = reading_service.get_reading_history(user_id)
-    if not events:
-        return 0
+    finish_dates = {_local_date(e.finished_at, tz) for e in events}
+    return _streak_from_dates(finish_dates, datetime.now(tz).date())
 
-    # Collect unique finish dates (in the target timezone), most recent first.
-    dates = sorted(
-        {_local_date(e.finished_at, tz) for e in events},
-        reverse=True,
-    )
 
-    today = datetime.now(tz).date()
+def calculate_genre_streak(user_id: str, genre: str, tz: timezone = None) -> int:
+    """
+    Calculate a user's current reading streak restricted to a single genre.
 
-    # Streak must start from today or yesterday — otherwise it has already broken.
-    if (today - dates[0]).days > 1:
-        return 0
+    Identical to :func:`calculate_streak`, except only books whose genre
+    matches ``genre`` count toward the streak. A day counts if the user
+    finished at least one book in that genre on it.
 
-    streak = 1
-    for i in range(len(dates) - 1):
-        delta = (dates[i] - dates[i + 1]).days
-        if delta == 1:
-            streak += 1
-        else:
-            break
+    Args:
+        user_id: ID of the user.
+        genre:   Genre to restrict the streak to (matched exactly).
+        tz:      Timezone to resolve calendar dates in. Defaults to the
+                 server's local timezone.
 
-    return streak
+    Returns:
+        The genre-specific streak count as an integer.
+    """
+    tz = tz or datetime.now().astimezone().tzinfo
+
+    events = reading_service.get_reading_history(user_id)
+    finish_dates = {
+        _local_date(e.finished_at, tz) for e in events if e.book.genre == genre
+    }
+    return _streak_from_dates(finish_dates, datetime.now(tz).date())
 
 
 def books_this_month(user_id: str) -> int:
